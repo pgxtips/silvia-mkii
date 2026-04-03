@@ -1,0 +1,15 @@
+{application, silvia,
+ [{description, "a discord bot used for live monitoring of homelab"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {silvia_app, []}},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {licenses, ["Apache-2.0"]},
+  {links, []}
+ ]}.

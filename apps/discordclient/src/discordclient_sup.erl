@@ -1,9 +1,9 @@
 %%%-------------------------------------------------------------------
-%% @doc myapp top level supervisor.
+%% @doc discordclient top level supervisor.
 %% @end
 %%%-------------------------------------------------------------------
 
--module(myapp_sup).
+-module(discordclient_sup).
 
 -behaviour(supervisor).
 
@@ -29,7 +29,15 @@ init([]) ->
     SupFlags = #{strategy => one_for_all,
                  intensity => 0,
                  period => 1},
-    ChildSpecs = [],
+    ChildSpecs = [
+        #{
+            id => heartbeat_gs,
+            start => {heartbeat_gs, start_link, [[]]},
+            restart => permanent,  
+            type => worker,
+            modules => [heartbeat_gs]
+        }
+    ],
     {ok, {SupFlags, ChildSpecs}}.
 
 %% internal functions

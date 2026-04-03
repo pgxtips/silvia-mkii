@@ -1,8 +1,8 @@
-{application, myapp,
- [{description, "An OTP application"},
+{application, discordclient,
+ [{description, "a discordclient used for managing connection to discord"},
   {vsn, "0.1.0"},
   {registered, []},
-  {mod, {myapp_app, []}},
+{mod, {discordclient_app, []}},
   {applications,
    [kernel,
     stdlib
