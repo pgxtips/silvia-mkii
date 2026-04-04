@@ -13,7 +13,19 @@ parse(StatemPid, StatemData, Msg) when is_binary(Msg) ->
 % INTERACTION_CREATE event
 internal_parse(StatemPid, _StatemData, #{<<"op">> := 0, <<"t">> := <<"INTERACTION_CREATE">>, <<"d">>
 := InteractionData}) ->
-    gen_statem:cast(StatemPid, {dispatch_event, interaction_create, InteractionData}),
+    InteractionMap = #{
+        interaction_id => maps:get(<<"id">>, InteractionData, undefined),
+        interaction_token => maps:get(<<"token">>, InteractionData, undefined),
+        interaction_type => maps:get(<<"type">>, InteractionData, undefined),
+        application_id => maps:get(<<"application_id">>, InteractionData, undefined),
+        guild_id => maps:get(<<"guild_id">>, InteractionData, undefined),
+        channel_id => maps:get(<<"channel_id">>, InteractionData, undefined),
+        command_id => maps:get(<<"id">>, maps:get(<<"data">>, InteractionData, #{}), undefined),
+        command_name => maps:get(<<"name">>, maps:get(<<"data">>, InteractionData, #{}), undefined),
+        command_data => maps:get(<<"data">>, InteractionData, #{}),
+        raw => InteractionData
+    },
+    gen_statem:cast(StatemPid, {dispatch_event, interaction_create, InteractionMap}),
     ok;
 % RECONNECT event
 internal_parse(StatemPid, _StatemData, #{<<"op">> := 7}) ->
@@ -54,9 +66,13 @@ internal_parse(StatemPid, StatemData, #{<<"op">> := 11}) ->
     JsonPayload = jsx:encode(Payload),
     gen_statem:cast(StatemPid, {send_heartbeat, JsonPayload}),
     ok;
-% READY EVENT
+% READY event
 internal_parse(StatemPid, _StatemData, #{<<"op">> := 0, <<"t">> := <<"READY">>, <<"d">> := ReadyData}) ->
     gen_statem:cast(StatemPid, {ready, ReadyData}),
+    ok;
+% READY GUILD event
+internal_parse(StatemPid, _StatemData, #{<<"op">> := 0, <<"t">> := <<"GUILD_CREATE">>, <<"d">> := GuildData}) ->
+    gen_statem:cast(StatemPid, {dispatch_event, guild_create, GuildData}),
     ok;
 internal_parse(StatemPid, _StatemData, #{<<"s">> := Seq}) when is_integer(Seq) ->
     gen_statem:cast(StatemPid, {update_last_seq, Seq}),

@@ -27,7 +27,7 @@ init(ArgsMap) ->
     BotToken = maps:get(bot_token, ArgsMap, undefined),
     {ok, WSSUrl} = open_gateway(BotToken),
     ?LOG_DEBUG("WSS Url: ~p", [WSSUrl]),
-    Data = #{bot_token=> BotToken, wss_url => WSSUrl},
+    Data = ArgsMap#{wss_url => WSSUrl},
     {ok, establish_gateway, Data, [{next_event, internal, connect}]}.
 
 callback_mode() -> state_functions.
@@ -130,10 +130,28 @@ establish_gateway(_EventType, _EventContent, Data) ->
 %% handles requests via the socket connection
 %% ---------------
 %% handles outbound websocket messages
+%% ---------------
+%% handles inbound websocket TEXT messages
+connected(info, {gun_ws, ConnPid, StreamRef, {text, Msg}}, Data) ->
+    try
+        ?LOG_DEBUG("Received ws text msg: ~s", [Msg]),
+        handle_gateway_message:parse(self(), Data, Msg),
+        {keep_state, Data}
+    catch
+        _:Reason -> 
+            ?LOG_ERROR("failed to parse ws message: ~p", [Reason]),
+            {keep_state, Data}
+    end;
 connected(cast, {send_payload, Payload}, Data = #{conn_pid := ConnPid, stream_ref := StreamRef}) ->
-    ?LOG_DEBUG("Sending payload: ~p", [Payload]),
-    ok = gun:ws_send(ConnPid, StreamRef, {text, Payload}),
-    {keep_state, Data};
+    try
+        ?LOG_DEBUG("Sending payload: ~p", [Payload]),
+        ok = gun:ws_send(ConnPid, StreamRef, {text, Payload}),
+        {keep_state, Data}
+    catch
+        _:Reason ->
+            ?LOG_ERROR("failed to send payload: ~p", [Reason]),
+            {keep_state, Data}
+    end;
 % this is called on the first heartbeat payload
 connected(cast, {send_heartbeat, Interval, Payload}, Data = #{conn_pid := ConnPid, stream_ref := StreamRef}) ->
     Jitter = rand:uniform(),
@@ -157,18 +175,25 @@ connected(cast, {send_heartbeat, Payload}, Data = #{conn_pid := ConnPid, stream_
 connected(cast, {update_last_seq, Seq}, Data) ->
     {keep_state, Data#{last_seq => Seq}};
 connected(cast, {ready, ReadyData}, Data) ->
-      SessionId = maps:get(<<"session_id">>, ReadyData, undefined),
-      ResumeUrl = maps:get(<<"resume_gateway_url">>, ReadyData, undefined),
-      User = maps:get(<<"user">>, ReadyData, #{}),
-      UserId = maps:get(<<"id">>, User, undefined),
-      Username = maps:get(<<"username">>, User, undefined),
-      ?LOG_INFO("READY received: session_id=~p user=~p (~p)", [SessionId, Username, UserId]),
-      {keep_state, Data#{
-          ready => true,
-          session_id => SessionId,
-          resume_gateway_url => ResumeUrl,
-          bot_user => User
-      }};
+    try
+        SessionId = maps:get(<<"session_id">>, ReadyData, undefined),
+        ResumeUrl = maps:get(<<"resume_gateway_url">>, ReadyData, undefined),
+        User = maps:get(<<"user">>, ReadyData, #{}),
+        UserId = maps:get(<<"id">>, User, undefined),
+        Username = maps:get(<<"username">>, User, undefined),
+        ?LOG_INFO("READY received: session_id=~p user=~p (~p)", [SessionId, Username, UserId]),
+
+        {keep_state, Data#{
+           ready => true,
+           session_id => SessionId,
+           resume_gateway_url => ResumeUrl,
+           bot_user => User
+        }}
+    catch
+        _:Reason ->
+            ?LOG_ERROR("failed at ready event receive: ~p", [Reason]),
+            {keep_state, Data}
+    end;
 connected(cast, {gateway_reconnect}, Data) ->
     ?LOG_WARNING("Gateway requested reconnect"),
     RetryData = clear_conn_data(Data),
@@ -176,41 +201,66 @@ connected(cast, {gateway_reconnect}, Data) ->
 connected(cast, {invalid_session, IsInvalid}, Data) ->
     case IsInvalid of
         true ->
-            BotToken = maps:get(bot_token, Data, undefined),
-            SessionId = maps:get(session_id, Data, undefined),
-            LastSeq = maps:get(last_seq, Data, undefined),
-            Payload = #{
-                 op => 6,
-                 d => #{
-                     token => BotToken,
-                     session_id => SessionId,
-                     seq => LastSeq
-                 }
-            },
-            JsonPayload = jsx:encode(Payload),
-            gen_statem:cast(self(), {send_payload, JsonPayload}),
-            {keep_state, Data};
+            try
+                BotToken = maps:get(bot_token, Data, undefined),
+                SessionId = maps:get(session_id, Data, undefined),
+                LastSeq = maps:get(last_seq, Data, undefined),
+                Payload = #{
+                     op => 6,
+                     d => #{
+                         token => BotToken,
+                         session_id => SessionId,
+                         seq => LastSeq
+                     }
+                },
+                JsonPayload = jsx:encode(Payload),
+                gen_statem:cast(self(), {send_payload, JsonPayload}),
+                {keep_state, Data}
+            catch
+                _:Reason -> 
+                    ?LOG_ERROR("failed to handle invalid_session request: ~p", [Reason]),
+                    {keep_state, Data}
+            end;
         false ->
            RetryData = clear_conn_data(Data),
            {next_state, establish_gateway, RetryData,
            [{state_timeout, 5000, retry_connect}]}
     end;
-connected(cast, {dispatch_event, interaction_create, InteractionData}, Data) ->
-    ?LOG_INFO("interaction create: ~p", [InteractionData]),
-    case maps:get(event_handler, Data, undefined) of
-        {Mod, HandlerState} ->
-            _ = Mod:handle_event(interaction_create, InteractionData, HandlerState),
-            {keep_state, Data};
-        _ ->
-            ?LOG_DEBUG("No event handler configured; dropping interaction_create"),
+connected(cast, {dispatch_event, interaction_create, InteractionMap}, Data) ->
+    ?LOG_DEBUG("interaction create: ~p", [InteractionMap]),
+    ?LOG_INFO("interaction received: ~p", [maps:get(command_name, InteractionMap, undefined)]),
+    try
+        case maps:get(event_handler, Data, undefined) of
+            {Mod, Function} ->
+                _ = Mod:Function(interaction_create, InteractionMap),
+                {keep_state, Data};
+            _ ->
+                ?LOG_INFO("No event handler configured; dropping interaction_create"),
+                {keep_state, Data}
+        end
+    catch
+        _:Reason ->
+            ?LOG_ERROR("failed to execute callback: ~p", [Reason]),
             {keep_state, Data}
     end;
-    
-%% handles inbound websocket TEXT messages
-connected(info, {gun_ws, ConnPid, StreamRef, {text, Msg}}, Data) ->
-    ?LOG_DEBUG("Received ws text msg: ~s", [Msg]),
-    handle_gateway_message:parse(self(), Data, Msg),
-    {keep_state, Data};
+connected(cast, {dispatch_event, guild_create, GuildData}, Data) ->
+    try
+        case maps:get(event_handler, Data, undefined) of
+            {Mod, Function} ->
+                _ = Mod:Function(guild_create, GuildData),
+                {keep_state, Data};
+            _ ->
+                ?LOG_INFO("No event handler configured; dropping guild_create"),
+                {keep_state, Data}
+        end
+    catch
+        _:Reason -> 
+            ?LOG_ERROR("failed to execute guild_create callback: ~p", [Reason]),
+            {keep_state, Data}
+    end;
+
+connected({call, From}, get_bot_token, Data) ->
+    {keep_state, Data, [{reply, From, maps:get(bot_token, Data, undefined)}]};
 
 %% handles inbound websocket CLOSE socket frames
 connected(info, {gun_ws, ConnPid, StreamRef, {close, Code, Reason}},
@@ -265,7 +315,7 @@ send_heartbeat_payload(Payload, ConnPid, StreamRef) ->
         ?LOG_DEBUG("Sending heartbeat payload: ~p", [Payload]),
         ok = gun:ws_send(ConnPid, StreamRef, {text, Payload})
     catch
-        _:_ -> ?LOG_ERROR("there was an error sending heartbeart")
+        _:Reason -> ?LOG_ERROR("there was an error sending heartbeart: ~p", [Reason])
     end.
 
 parse_wss_url(Url) ->
