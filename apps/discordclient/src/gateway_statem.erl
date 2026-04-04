@@ -2,7 +2,6 @@
 
 -export([send_heartbeat_payload/3]).
 
-
 -export([open_gateway/1]).
 -export([parse_wss_url/1]).
 
@@ -13,16 +12,19 @@
 -export([init/1]).
 -export([callback_mode/0]).
 -export([terminate/3]).
--export([start_link/0]).
+-export([start_link/1]).
 -export([establish_gateway/3]).
 -export([connected/3]).
 
-start_link() ->
-    gen_statem:start({local, ?MODULE}, ?MODULE, [], []).
+-spec start_link(Args :: map()) -> term().
+start_link(ArgsMap) ->
+    ssl:start(),
+    {ok, _} = application:ensure_all_started(gun),
+    gen_statem:start({local, ?MODULE}, ?MODULE, ArgsMap, []).
 
 %%% gen_statem callbacks
-init([]) ->
-    BotToken = os:getenv("DISCORD_BOT_TOKEN"),
+init(ArgsMap) ->
+    BotToken = maps:get(bot_token, ArgsMap, undefined),
     {ok, WSSUrl} = open_gateway(BotToken),
     ?LOG_DEBUG("WSS Url: ~p", [WSSUrl]),
     Data = #{bot_token=> BotToken, wss_url => WSSUrl},
@@ -186,11 +188,22 @@ connected(cast, {invalid_session, IsInvalid}, Data) ->
                  }
             },
             JsonPayload = jsx:encode(Payload),
-            gen_statem:cast(self(), {send_payload, JsonPayload});
+            gen_statem:cast(self(), {send_payload, JsonPayload}),
+            {keep_state, Data};
         false ->
            RetryData = clear_conn_data(Data),
            {next_state, establish_gateway, RetryData,
            [{state_timeout, 5000, retry_connect}]}
+    end;
+connected(cast, {dispatch_event, interaction_create, InteractionData}, Data) ->
+    ?LOG_INFO("interaction create: ~p", [InteractionData]),
+    case maps:get(event_handler, Data, undefined) of
+        {Mod, HandlerState} ->
+            _ = Mod:handle_event(interaction_create, InteractionData, HandlerState),
+            {keep_state, Data};
+        _ ->
+            ?LOG_DEBUG("No event handler configured; dropping interaction_create"),
+            {keep_state, Data}
     end;
     
 %% handles inbound websocket TEXT messages

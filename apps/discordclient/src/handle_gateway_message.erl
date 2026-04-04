@@ -10,7 +10,12 @@ parse(StatemPid, StatemData, Msg) when is_binary(Msg) ->
     MapData = jsx:decode(Msg),
     internal_parse(StatemPid, StatemData, MapData).
 
-% READY EVENT
+% INTERACTION_CREATE event
+internal_parse(StatemPid, _StatemData, #{<<"op">> := 0, <<"t">> := <<"INTERACTION_CREATE">>, <<"d">>
+:= InteractionData}) ->
+    gen_statem:cast(StatemPid, {dispatch_event, interaction_create, InteractionData}),
+    ok;
+% RECONNECT event
 internal_parse(StatemPid, _StatemData, #{<<"op">> := 7}) ->
     gen_statem:cast(StatemPid, {gateway_reconnect}),
     ok;
