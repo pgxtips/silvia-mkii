@@ -32,16 +32,14 @@ Create these channels and store their IDs in Silvia config.
 - `/ping`
   - Purpose: confirms bot availability.
   - Response: `Pong!`
-
-### Planned
-
 - `/host list`
   - Purpose: list all monitored hosts and current state.
-
 - `/host status <host>`
   - Params:
-    - `<host>`: host identifier or hostname.
-  - Purpose: show detailed status for one host.
+    - `<host>`: host identifier from config.
+  - Purpose: show status for one host.
+
+### Planned
 
 - `/alerts ack <incident_id>`
   - Params:
@@ -53,17 +51,26 @@ Create these channels and store their IDs in Silvia config.
 
 ## Silvia Config Shape
 
-Silvia host config is expected to be shaped like this:
+Create `config/silvia.config` with your monitored hosts.
+
+Path:
+- `config/silvia.config`
+
+Example:
 
 ```erlang
-{silvia, [
-    {hosts, [
-        {"host-a", {"10.0.0.10", 80}},
-        {"host-b", {"10.0.0.20", 80}},
-        {"host-c", {"10.0.0.30", 80}}
-    ]}
+{log_level, info}.
+
+{hosts, [
+    {hosta, {"10.0.0.1", 80}},
+    {hostb, {"10.0.0.2", 80}},
+    {hostc, {"10.0.0.3", 80}}
 ]}.
 ```
+
+Notes:
+- This file is loaded by Silvia on startup.
+- Host keys (`hosta`, `hostb`, `hostc`) are what you use in `/host status <host>`.
 
 ## Build
 
