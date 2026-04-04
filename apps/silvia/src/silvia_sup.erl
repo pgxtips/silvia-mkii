@@ -19,15 +19,18 @@ start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 init([]) ->
+    FileConfig = load_silvia_config("config/silvia.config"),
+    LoggerLevel = maps:get(log_level, FileConfig),
+    logger:set_primary_config(level, LoggerLevel),
+
     AppId = os:getenv("DISCORD_APP_ID"),
     DiscordBotToken = os:getenv("DISCORD_BOT_TOKEN"),
-    ?LOG_INFO("app_id=~p bot_token_prefix=~p",
-              [AppId, lists:sublist(DiscordBotToken, 8)]),
-    OptsMap = #{
+    OptsMap0 = #{
         app_id=>AppId,
         bot_token=>DiscordBotToken,
         event_handler=>{event_handler, handle_event}
     },
+    OptsMap = maps:merge(OptsMap0, FileConfig),
 
     SupFlags = #{strategy => one_for_all,
                  intensity => 0,
@@ -39,6 +42,12 @@ init([]) ->
         type => worker,
         modules => [discordclient]},
 
+        #{id => host_monitor_sup,
+        start => {host_monitor_sup, start_link, []},
+        restart => permanent,
+        type => supervisor,
+        modules => [host_monitor_sup]},
+
         #{id => silvia_gs,
         start => {silvia_gs, start_link, [OptsMap]},
         restart => permanent,  
@@ -48,3 +57,11 @@ init([]) ->
     {ok, {SupFlags, ChildSpecs}}.
 
 %% internal functions
+load_silvia_config(Path) ->
+    case file:consult(Path) of
+        {ok, Terms} when is_list(Terms) ->
+            maps:from_list(Terms);
+        {error, Reason} ->
+            ?LOG_ERROR("failed to load silvia config ~s: ~p", [Path, Reason]),
+            #{}
+    end.
