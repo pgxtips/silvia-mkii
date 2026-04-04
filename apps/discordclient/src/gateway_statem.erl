@@ -138,26 +138,28 @@ connected(cast, {send_heartbeat, Interval, Payload}, Data = #{conn_pid := ConnPi
     Time = max(1, trunc(Interval * Jitter)),
     ?LOG_DEBUG("Sending heartbeat in: ~p", [Time]), 
     timer:apply_after(Time, ?MODULE, send_heartbeat_payload, [Payload, ConnPid, StreamRef]),
-    {keep_state, Data#{hb_interval=>Time}};
+    {keep_state, Data#{hb_interval=>Interval}};
 % this is called on the heartbeat ack event (notice no interval param)
 connected(cast, {send_heartbeat, Payload}, Data = #{conn_pid := ConnPid, stream_ref := StreamRef}) ->
     case maps:get(hb_interval, Data, undefined) of
-        Time ->
-            ?LOG_DEBUG("Sending heartbeat in: ~p", [Time]), 
-            timer:apply_after(Time, ?MODULE, send_heartbeat_payload, [Payload, ConnPid, StreamRef]),
-            {keep_state, Data};
-        _ -> 
+        undefined -> 
             ?LOG_ERROR("Unable to retrieve heartbeat interval"), 
             RetryData = clear_conn_data(Data),
             {next_state, establish_gateway, RetryData,
-            [{state_timeout, 5000, retry_connect}]}
+            [{state_timeout, 5000, retry_connect}]};
+        Time ->
+            ?LOG_DEBUG("Sending heartbeat in: ~p", [Time]), 
+            timer:apply_after(Time, ?MODULE, send_heartbeat_payload, [Payload, ConnPid, StreamRef]),
+            {keep_state, Data}
     end;
 
+connected(cast, {update_last_seq, Seq}, Data) ->
+    {keep_state, Data#{last_seq => Seq}};
 
 %% handles inbound websocket TEXT messages
 connected(info, {gun_ws, ConnPid, StreamRef, {text, Msg}}, Data) ->
     ?LOG_DEBUG("Received ws text msg: ~s", [Msg]),
-    handle_gateway_message:parse(self(), Msg),
+    handle_gateway_message:parse(self(), Data, Msg),
     {keep_state, Data};
 
 %% handles inbound websocket CLOSE socket frames
