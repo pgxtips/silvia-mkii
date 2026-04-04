@@ -3,7 +3,7 @@
 -export([send_heartbeat_payload/3]).
 
 
--export([open_gateway/0]).
+-export([open_gateway/1]).
 -export([parse_wss_url/1]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -22,9 +22,10 @@ start_link() ->
 
 %%% gen_statem callbacks
 init([]) ->
-    {ok, WSSUrl} = open_gateway(),
+    BotToken = os:getenv("DISCORD_BOT_TOKEN"),
+    {ok, WSSUrl} = open_gateway(BotToken),
     ?LOG_DEBUG("WSS Url: ~p", [WSSUrl]),
-    Data = #{wss_url => WSSUrl},
+    Data = #{bot_token=> BotToken, wss_url => WSSUrl},
     {ok, establish_gateway, Data, [{next_event, internal, connect}]}.
 
 callback_mode() -> state_functions.
@@ -131,7 +132,6 @@ connected(cast, {send_payload, Payload}, Data = #{conn_pid := ConnPid, stream_re
     ?LOG_DEBUG("Sending payload: ~p", [Payload]),
     ok = gun:ws_send(ConnPid, StreamRef, {text, Payload}),
     {keep_state, Data};
-
 % this is called on the first heartbeat payload
 connected(cast, {send_heartbeat, Interval, Payload}, Data = #{conn_pid := ConnPid, stream_ref := StreamRef}) ->
     Jitter = rand:uniform(),
@@ -152,10 +152,47 @@ connected(cast, {send_heartbeat, Payload}, Data = #{conn_pid := ConnPid, stream_
             timer:apply_after(Time, ?MODULE, send_heartbeat_payload, [Payload, ConnPid, StreamRef]),
             {keep_state, Data}
     end;
-
 connected(cast, {update_last_seq, Seq}, Data) ->
     {keep_state, Data#{last_seq => Seq}};
-
+connected(cast, {ready, ReadyData}, Data) ->
+      SessionId = maps:get(<<"session_id">>, ReadyData, undefined),
+      ResumeUrl = maps:get(<<"resume_gateway_url">>, ReadyData, undefined),
+      User = maps:get(<<"user">>, ReadyData, #{}),
+      UserId = maps:get(<<"id">>, User, undefined),
+      Username = maps:get(<<"username">>, User, undefined),
+      ?LOG_INFO("READY received: session_id=~p user=~p (~p)", [SessionId, Username, UserId]),
+      {keep_state, Data#{
+          ready => true,
+          session_id => SessionId,
+          resume_gateway_url => ResumeUrl,
+          bot_user => User
+      }};
+connected(cast, {gateway_reconnect}, Data) ->
+    ?LOG_WARNING("Gateway requested reconnect"),
+    RetryData = clear_conn_data(Data),
+    {next_state, establish_gateway, RetryData, [{state_timeout, 0, retry_connect}]};
+connected(cast, {invalid_session, IsInvalid}, Data) ->
+    case IsInvalid of
+        true ->
+            BotToken = maps:get(bot_token, Data, undefined),
+            SessionId = maps:get(session_id, Data, undefined),
+            LastSeq = maps:get(last_seq, Data, undefined),
+            Payload = #{
+                 op => 6,
+                 d => #{
+                     token => BotToken,
+                     session_id => SessionId,
+                     seq => LastSeq
+                 }
+            },
+            JsonPayload = jsx:encode(Payload),
+            gen_statem:cast(self(), {send_payload, JsonPayload});
+        false ->
+           RetryData = clear_conn_data(Data),
+           {next_state, establish_gateway, RetryData,
+           [{state_timeout, 5000, retry_connect}]}
+    end;
+    
 %% handles inbound websocket TEXT messages
 connected(info, {gun_ws, ConnPid, StreamRef, {text, Msg}}, Data) ->
     ?LOG_DEBUG("Received ws text msg: ~s", [Msg]),
@@ -163,6 +200,21 @@ connected(info, {gun_ws, ConnPid, StreamRef, {text, Msg}}, Data) ->
     {keep_state, Data};
 
 %% handles inbound websocket CLOSE socket frames
+connected(info, {gun_ws, ConnPid, StreamRef, {close, Code, Reason}},
+    Data = #{conn_pid := ConnPid, stream_ref := StreamRef}) ->
+    ?LOG_WARNING("WebSocket close frame received: code=~p reason=~p", [Code, Reason]),
+    RetryData = clear_conn_data(Data),
+    case Code of
+      4004 ->  % auth failed, don't loop forever
+            {stop, {discord_auth_failed, Reason}, RetryData};
+      4010 ->  % invalid shard
+            {stop, {discord_invalid_shard, Reason}, RetryData};
+      4011 ->  % sharding required
+            {stop, {discord_sharding_required, Reason}, RetryData};
+      _ ->
+           {next_state, establish_gateway, RetryData,
+           [{state_timeout, 5000, retry_connect}]}
+      end;
 connected(info, {gun_ws, ConnPid, StreamRef, close},
           Data = #{conn_pid := ConnPid, stream_ref := StreamRef}) ->
     ?LOG_WARNING("Websocket close frame received"),
@@ -234,8 +286,7 @@ parse_wss_url(Url) ->
 clear_conn_data(Data) ->
     maps:without([conn_pid, stream_ref], Data).
 
-open_gateway() ->
-    BotToken = os:getenv("DISCORD_BOT_TOKEN"),
+open_gateway(BotToken) ->
     RequestURL = "https://discord.com/api/v10/gateway/bot",
     RequestHeaders = [
         {"Authorization", io_lib:format("Bot ~s", [BotToken])}
