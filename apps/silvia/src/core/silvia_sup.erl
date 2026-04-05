@@ -28,7 +28,9 @@ init([]) ->
     OptsMap0 = #{
         app_id=>AppId,
         bot_token=>DiscordBotToken,
-        event_handler=>{event_handler, handle_event}
+        event_handler=>{event_handler, handle_event},
+        metric_modules=>[prometheus_host_oper_status_metric],
+        alert_modules=>[#{module => host_oper_status_alert, config => #{}}]
     },
     OptsMap = maps:merge(OptsMap0, FileConfig),
 
@@ -48,11 +50,11 @@ init([]) ->
         type => worker,
         modules => [alert_gs]},
 
-        #{id => host_monitor_sup,
-        start => {host_monitor_sup, start_link, []},
+        #{id => metrics_gs,
+        start => {metrics_gs, start_link, [OptsMap]},
         restart => permanent,
-        type => supervisor,
-        modules => [host_monitor_sup]},
+        type => worker,
+        modules => [metrics_gs]},
 
         #{id => silvia_gs,
         start => {silvia_gs, start_link, [OptsMap]},

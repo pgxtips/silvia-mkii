@@ -10,8 +10,6 @@ start_link(Args) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, Args, []).
 
 init(Args) ->
-    Hosts = maps:get(hosts, Args, []),
-    ok = host_monitor_sup:start_monitors(Hosts),
     {ok, Args}.
 
 handle_call(get_app_id, _From, State) ->
@@ -23,10 +21,23 @@ handle_call(get_bot_token, _From, State) ->
 handle_call(get_alert_channels, _From, State) ->
     Response = maps:get(alert_channels, State, #{}),
     {reply, Response, State};
-handle_call(get_host_statuses, _From, State) ->
-    {reply, host_monitor_sup:get_host_statuses(), State};
-handle_call({get_host_status, HostName}, _From, State) ->
-    {reply, host_monitor_sup:get_host_status(HostName), State};
+handle_call(get_hosts, _From, State) ->
+    Response = maps:get(hosts, State, []),
+    {reply, Response, State};
+handle_call({get_metric, {Module, Function, Args}}, _From, State) ->
+    Reply = try
+        apply(Module, Function, Args)
+    catch
+        _:Reason -> {error, Reason}
+    end,
+    {reply, Reply, State};
+handle_call({Module, Function, Args}, _From, State) ->
+    Reply = try
+        apply(Module, Function, Args)
+    catch
+        _:Reason -> {error, Reason}
+    end,
+    {reply, Reply, State};
 handle_call(_Request, _From, State) ->
     {reply, not_implemented, State}.
 

@@ -22,8 +22,16 @@ handle_event(
         interaction_token := InteractionTokenBin
     }
 ) ->
-    Statuses = gen_server:call(silvia_gs, get_host_statuses),
-    reply(InteractionIdBin, InteractionTokenBin, format_host_list(Statuses));
+    Hosts = gen_server:call(silvia_gs, get_hosts),
+    case gen_server:call(
+           silvia_gs,
+           {get_metric, {host_oper_status, get_host_statuses, [Hosts]}}
+         ) of
+        {ok, Statuses} ->
+            reply(InteractionIdBin, InteractionTokenBin, format_host_list(Statuses));
+        {error, _} ->
+            reply(InteractionIdBin, InteractionTokenBin, "Unable to fetch host statuses")
+    end;
 handle_event(
     interaction_create,
     #{
@@ -42,9 +50,9 @@ handle_event(
         interaction_token := InteractionTokenBin
     }
 ) ->
-    Statuses = gen_server:call(silvia_gs, get_host_statuses),
-    ReplyMsg = case resolve_host_key(HostValue, Statuses) of
-        {ok, HostKey} -> format_host_status(HostKey);
+    Hosts = gen_server:call(silvia_gs, get_hosts),
+    ReplyMsg = case resolve_host_key(HostValue, Hosts) of
+        {ok, HostKey} -> format_host_status(HostKey, Hosts);
         error -> "Host not found"
     end,
     reply(InteractionIdBin, InteractionTokenBin, ReplyMsg);
@@ -80,23 +88,30 @@ reply(InteractionIdBin, InteractionTokenBin, Payload) ->
     InteractionToken = binary_to_list(InteractionTokenBin),
     discordclient:interaction_reply_message(InteractionId, InteractionToken, Payload).
 
-resolve_host_key(HostValue, Statuses) when is_binary(HostValue) ->
-    resolve_host_key(binary_to_existing_atom(HostValue, utf8), Statuses);
-resolve_host_key(HostValue, Statuses) when is_list(HostValue) ->
-    resolve_host_key(list_to_existing_atom(HostValue), Statuses);
-resolve_host_key(HostKey, Statuses) when is_atom(HostKey) ->
-    case maps:find(HostKey, Statuses) of
-        {ok, _} -> {ok, HostKey};
-        error -> error
+resolve_host_key(HostValue, Hosts) when is_binary(HostValue) ->
+    resolve_host_key(binary_to_list(HostValue), Hosts);
+resolve_host_key(HostValue, Hosts) when is_list(HostValue) ->
+    case lists:keyfind(HostValue, 1, [{host_name_to_string(Name), Name} || {Name, _} <- Hosts]) of
+        {_, HostKey} -> {ok, HostKey};
+        false -> error
     end;
 resolve_host_key(_, _) ->
     error.
 
-format_host_status(HostKey) ->
-    case gen_server:call(silvia_gs, {get_host_status, HostKey}) of
-        {ok, HostStatus} ->
-            Reply = io_lib:format("~p: ~p", [HostKey, HostStatus]),
-            lists:flatten(Reply);
+format_host_status(HostKey, Hosts) ->
+    case gen_server:call(
+           silvia_gs,
+           {get_metric, {host_oper_status, get_host_status, [HostKey, Hosts]}}
+         ) of
+        {ok, HostStatus} when is_map(HostStatus), map_size(HostStatus) =:= 0 ->
+            "No interfaces found";
+        {ok, HostStatus} when is_map(HostStatus) ->
+            Lines = lists:map(
+              fun({Iface, Status}) ->
+                  lists:flatten(io_lib:format("~s: ~p", [interface_to_string(Iface), Status]))
+              end,
+              maps:to_list(HostStatus)),
+            string:join(Lines, "\n");
         {error, _} -> "Host not found"
     end.
 
@@ -105,7 +120,23 @@ format_host_list(Statuses) when map_size(Statuses) =:= 0 ->
 format_host_list(Statuses) ->
     Lines = lists:map(
               fun({Host, Status}) ->
-                  lists:flatten(io_lib:format("~p: ~p", [Host, Status]))
+                  lists:flatten(io_lib:format("~s: ~p", [host_name_to_string(Host), Status]))
               end,
               maps:to_list(Statuses)),
     string:join(Lines, "\n").
+
+host_name_to_string(Name) when is_atom(Name) ->
+    atom_to_list(Name);
+host_name_to_string(Name) when is_binary(Name) ->
+    binary_to_list(Name);
+host_name_to_string(Name) when is_list(Name) ->
+    Name;
+host_name_to_string(Name) ->
+    lists:flatten(io_lib:format("~p", [Name])).
+
+interface_to_string(Iface) when is_binary(Iface) ->
+    binary_to_list(Iface);
+interface_to_string(Iface) when is_list(Iface) ->
+    Iface;
+interface_to_string(Iface) ->
+    lists:flatten(io_lib:format("~p", [Iface])).
