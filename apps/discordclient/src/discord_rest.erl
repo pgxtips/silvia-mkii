@@ -2,7 +2,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([register_guild_command/4, interaction_callback/3]).
+-export([register_guild_command/4, interaction_callback/3, create_channel_message/3]).
 
 -define(DISCORD_API_BASE, "https://discord.com/api/v10").
 
@@ -34,6 +34,16 @@ interaction_callback(InteractionId, InteractionToken, CallbackPayload) ->
     Headers = [{"Content-Type", "application/json"}],
     post_json(URL, Headers, CallbackPayload).
 
+-spec create_channel_message(string(), string(), binary() | string()) -> {ok, map()} | {error, term()}.
+create_channel_message(ChannelId, BotToken, Content) ->
+    URL = ?DISCORD_API_BASE ++ "/channels/" ++ ChannelId ++ "/messages",
+    Headers = [
+        {"Authorization", "Bot " ++ BotToken},
+        {"Content-Type", "application/json"}
+    ],
+    Payload = #{content => to_bin(Content)},
+    post_json(URL, Headers, Payload).
+
 
 %% ===================
 %% private functions
@@ -59,3 +69,6 @@ decode_success(RespBody) ->
         <<>> -> {ok, #{}};
         _ -> {ok, jsx:decode(RespBin)}
     end.
+
+to_bin(Value) when is_binary(Value) -> Value;
+to_bin(Value) when is_list(Value) -> list_to_binary(Value).

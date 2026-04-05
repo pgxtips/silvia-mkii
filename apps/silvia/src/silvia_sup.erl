@@ -42,6 +42,12 @@ init([]) ->
         type => worker,
         modules => [discordclient]},
 
+        #{id => alert_gs,
+        start => {alert_gs, start_link, []},
+        restart => permanent,
+        type => worker,
+        modules => [alert_gs]},
+
         #{id => host_monitor_sup,
         start => {host_monitor_sup, start_link, []},
         restart => permanent,

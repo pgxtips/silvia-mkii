@@ -2,7 +2,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([start_link/1, stop/0, register_guild_command/4, interaction_callback/3, interaction_reply_message/3]).
+-export([start_link/1, stop/0, register_guild_command/4, interaction_callback/3, interaction_reply_message/3, send_channel_message/3]).
 
 %% Opts example:
 %% #{bot_token => "...", event_handler => {silvia_gateway_handler, []}}
@@ -38,6 +38,9 @@ interaction_reply_message(InteractionId, InteractionToken, Payload) ->
     },
     ?LOG_INFO("Interacton reply (~p): ~p", [InteractionId, Payload]),
     discord_rest:interaction_callback(InteractionId, InteractionToken, ReplyPayload).
+
+send_channel_message(ChannelId, BotToken, Payload) ->
+    discord_rest:create_channel_message(ChannelId, BotToken, Payload).
 
 to_bin(Payload) when is_binary(Payload) -> Payload;
 to_bin(Payload) when is_list(Payload) -> list_to_binary(Payload).
