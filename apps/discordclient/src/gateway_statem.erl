@@ -240,7 +240,9 @@ connected(cast, {dispatch_event, interaction_create, InteractionMap}, Data) ->
         end
     catch
         _:Reason ->
-            ?LOG_ERROR("failed to execute callback: ~p", [Reason]),
+            Error = io_lib:format("failed to execute interaction_create callback: ~p", [Reason]),
+            ?LOG_ERROR("~p", [Error]),
+            reply_interaction_error(InteractionMap, Error),
             {keep_state, Data}
     end;
 connected(cast, {dispatch_event, guild_create, GuildData}, Data) ->
@@ -348,6 +350,31 @@ parse_wss_url(Url) ->
 
 clear_conn_data(Data) ->
     maps:without([conn_pid, stream_ref], Data).
+
+reply_interaction_error(InteractionMap, Reason) ->
+    try
+        case {
+            maps:get(interaction_id, InteractionMap, undefined),
+            maps:get(interaction_token, InteractionMap, undefined)
+        } of
+            {InteractionIdBin, InteractionTokenBin}
+              when is_binary(InteractionIdBin), is_binary(InteractionTokenBin) ->
+                InteractionId = binary_to_list(InteractionIdBin),
+                InteractionToken = binary_to_list(InteractionTokenBin),
+                discordclient:interaction_reply_message(
+                    InteractionId,
+                    InteractionToken,
+                    lists:flatten(Reason)
+                ),
+                ok;
+            _ ->
+                ok
+        end
+    catch
+        _:ReplyReason ->
+            ?LOG_ERROR("failed to send interaction error reply: ~p", [ReplyReason]),
+            ok
+    end.
 
 open_gateway(BotToken) ->
     RequestURL = "https://discord.com/api/v10/gateway/bot",

@@ -43,20 +43,12 @@ handle_event(
     }
 ) ->
     Statuses = gen_server:call(silvia_gs, get_host_statuses),
-    case resolve_host_key(HostValue, Statuses) of
-        {ok, HostKey} ->
-            case gen_server:call(silvia_gs, {get_host_status, HostKey}) of
-                {ok, HostStatus} ->
-                    Reply = io_lib:format("~p: ~p", [HostKey, HostStatus]),
-                    reply(InteractionIdBin, InteractionTokenBin, lists:flatten(Reply));
-                {error, _} ->
-                    reply(InteractionIdBin, InteractionTokenBin, "Host not found")
-            end;
-        error ->
-            reply(InteractionIdBin, InteractionTokenBin, "Host not found")
-    end;
-handle_event(
-    interaction_create,
+    ReplyMsg = case resolve_host_key(HostValue, Statuses) of
+        {ok, HostKey} -> format_host_status(HostKey);
+        error -> "Host not found"
+    end,
+    reply(InteractionIdBin, InteractionTokenBin, ReplyMsg);
+handle_event(interaction_create,
     #{
         command_name := <<"host">>,
         interaction_id := InteractionIdBin,
@@ -81,8 +73,7 @@ handle_event(guild_create, GuildData) ->
     AppId = gen_server:call(silvia_gs, get_app_id),
     BotToken = gen_server:call(silvia_gs, get_bot_token),
     reg_events:register_events(AppId, BotToken, GuildId),
-
-    event_undefined.
+    ok.
 
 reply(InteractionIdBin, InteractionTokenBin, Payload) ->
     InteractionId = binary_to_list(InteractionIdBin),
@@ -90,26 +81,24 @@ reply(InteractionIdBin, InteractionTokenBin, Payload) ->
     discordclient:interaction_reply_message(InteractionId, InteractionToken, Payload).
 
 resolve_host_key(HostValue, Statuses) when is_binary(HostValue) ->
-    resolve_host_key(binary_to_list(HostValue), Statuses);
+    resolve_host_key(binary_to_existing_atom(HostValue, utf8), Statuses);
 resolve_host_key(HostValue, Statuses) when is_list(HostValue) ->
-    Pairs = maps:to_list(Statuses),
-    case lists:filter(
-           fun({Key, _}) ->
-               string:lowercase(host_key_to_string(Key)) =:= string:lowercase(HostValue)
-           end,
-           Pairs) of
-        [{HostKey, _}] -> {ok, HostKey};
-        _ -> error
-    end.
+    resolve_host_key(list_to_existing_atom(HostValue), Statuses);
+resolve_host_key(HostKey, Statuses) when is_atom(HostKey) ->
+    case maps:find(HostKey, Statuses) of
+        {ok, _} -> {ok, HostKey};
+        error -> error
+    end;
+resolve_host_key(_, _) ->
+    error.
 
-host_key_to_string(Key) when is_atom(Key) ->
-    atom_to_list(Key);
-host_key_to_string(Key) when is_list(Key) ->
-    Key;
-host_key_to_string(Key) when is_binary(Key) ->
-    binary_to_list(Key);
-host_key_to_string(Key) ->
-    lists:flatten(io_lib:format("~p", [Key])).
+format_host_status(HostKey) ->
+    case gen_server:call(silvia_gs, {get_host_status, HostKey}) of
+        {ok, HostStatus} ->
+            Reply = io_lib:format("~p: ~p", [HostKey, HostStatus]),
+            lists:flatten(Reply);
+        {error, _} -> "Host not found"
+    end.
 
 format_host_list(Statuses) when map_size(Statuses) =:= 0 ->
     "No hosts configured";
